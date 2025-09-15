@@ -1,12 +1,8 @@
 import torch
 from torch.utils.data import DataLoader
 from bpe import BPE
-from model import GPT
+from model import GPTLow
 from dataset import CharDataset
-
-def load_text(path):
-    with open(path, 'r', encoding='utf-8') as f:
-        return f.read()
 
 def train(
     text,
@@ -19,7 +15,7 @@ def train(
     batch_size=8,
     epochs=1,
     lr=3e-4,
-    device='cuda' if torch.cuda.is_available() else 'cpu'
+    device='cpu'
 ):
     bpe = BPE(vocab_size)
     bpe.fit(text)
@@ -29,30 +25,20 @@ def train(
     if len(dataset) == 0:
         raise ValueError('text too short for block_size')
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
-    model = GPT(vocab_size, n_positions, n_embd, n_head, n_layer).to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=lr)
-    scaler = torch.cuda.amp.GradScaler() if device.startswith('cuda') else None
+    model = GPTLow(vocab_size, n_positions, n_embd, n_head, n_layer, device=device)
+    model.to(device)
+    params = [p for p in model.parameters() if p is not None and p.requires_grad]
+    opt = torch.optim.AdamW(params, lr=lr)
 
     for epoch in range(epochs):
-        model.train()
         total_loss = 0.0
         for xb, yb in loader:
-            xb = xb.to(device)
-            yb = yb.to(device)
+            xb = xb.to(device); yb = yb.to(device)
             opt.zero_grad()
-            if scaler is not None:
-                with torch.cuda.amp.autocast():
-                    _, loss = model(xb, yb)
-                scaler.scale(loss).backward()
-                scaler.unscale_(opt)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                scaler.step(opt)
-                scaler.update()
-            else:
-                _, loss = model(xb, yb)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                opt.step()
+            _, loss = model.forward(xb, yb)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(params, 1.0)
+            opt.step()
             total_loss += loss.item()
         avg = total_loss / len(loader)
         print(f'epoch {epoch+1} loss {avg:.4f}')
